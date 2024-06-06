@@ -165,7 +165,7 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
 
   if (s.ok()) {
     BlockContents contents;
-    if (block_cache != nullptr) {
+    if (block_cache != nullptr) { // 先忽略block cache
       char cache_key_buffer[16];
       EncodeFixed64(cache_key_buffer, table->rep_->cache_id);
       EncodeFixed64(cache_key_buffer + 8, handle.offset());
@@ -183,8 +183,8 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
           }
         }
       }
-    } else {
-      s = ReadBlock(table->rep_->file, options, handle, &contents);
+    } else { 
+      s = ReadBlock(table->rep_->file, options, handle, &contents); // 解析整个data block的结构
       if (s.ok()) {
         block = new Block(contents);
       }
@@ -218,14 +218,14 @@ Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
   Iterator* iiter = rep_->index_block->NewIterator(rep_->options.comparator);
   iiter->Seek(k);
   if (iiter->Valid()) {
-    Slice handle_value = iiter->value();
+    Slice handle_value = iiter->value();  // index block的entry key是internal key，而entry value是block handle指向data block的一个位置
     FilterBlockReader* filter = rep_->filter;
     BlockHandle handle;
-    if (filter != nullptr && handle.DecodeFrom(&handle_value).ok() &&
+    if (filter != nullptr && handle.DecodeFrom(&handle_value).ok() && // 应该是bloom过滤器，后续看下细节，先不看这块
         !filter->KeyMayMatch(handle.offset(), k)) {
       // Not found
     } else {
-      Iterator* block_iter = BlockReader(this, options, iiter->value());
+      Iterator* block_iter = BlockReader(this, options, iiter->value());  // index记录指向了data block开始位置
       block_iter->Seek(k);
       if (block_iter->Valid()) {
         (*handle_result)(arg, block_iter->key(), block_iter->value());

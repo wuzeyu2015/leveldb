@@ -116,7 +116,7 @@ bool InternalFilterPolicy::KeyMayMatch(const Slice& key, const Slice& f) const {
 
 LookupKey::LookupKey(const Slice& user_key, SequenceNumber s) {
   size_t usize = user_key.size();
-  size_t needed = usize + 13;  // A conservative estimate
+  size_t needed = usize + 13;  // A conservative estimate, 13等于8+5，5是key len最大7bit编码字节数，8是seq id&type
   char* dst;
   if (needed <= sizeof(space_)) {
     dst = space_;
@@ -124,11 +124,11 @@ LookupKey::LookupKey(const Slice& user_key, SequenceNumber s) {
     dst = new char[needed];
   }
   start_ = dst;
-  dst = EncodeVarint32(dst, usize + 8);
+  dst = EncodeVarint32(dst, usize + 8); 
   kstart_ = dst;
   std::memcpy(dst, user_key.data(), usize);
   dst += usize;
-  EncodeFixed64(dst, PackSequenceAndType(s, kValueTypeForSeek));
+  EncodeFixed64(dst, PackSequenceAndType(s, kValueTypeForSeek));  // kTypeValue
   dst += 8;
   end_ = dst;
 }

@@ -44,12 +44,12 @@ Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
   char buf[sizeof(file_number)];
   EncodeFixed64(buf, file_number);
   Slice key(buf, sizeof(buf));
-  *handle = cache_->Lookup(key);
+  *handle = cache_->Lookup(key);  // 缓存已经打开的SST文件: file_number->TableAndFile
   if (*handle == nullptr) {
     std::string fname = TableFileName(dbname_, file_number);
     RandomAccessFile* file = nullptr;
     Table* table = nullptr;
-    s = env_->NewRandomAccessFile(fname, &file);
+    s = env_->NewRandomAccessFile(fname, &file);  // 打开SST文件
     if (!s.ok()) {
       std::string old_fname = SSTTableFileName(dbname_, file_number);
       if (env_->NewRandomAccessFile(old_fname, &file).ok()) {
@@ -57,7 +57,7 @@ Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
       }
     }
     if (s.ok()) {
-      s = Table::Open(options_, file, file_size, &table);
+      s = Table::Open(options_, file, file_size, &table); //  解析SST文件
     }
 
     if (!s.ok()) {
@@ -104,8 +104,9 @@ Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
   Cache::Handle* handle = nullptr;
   Status s = FindTable(file_number, file_size, &handle);
   if (s.ok()) {
-    Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
-    s = t->InternalGet(options, k, arg, handle_result);
+    Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table; 
+    // SST内查找key
+    s = t->InternalGet(options, k, arg, handle_result); // k是internal key
     cache_->Release(handle);
   }
   return s;

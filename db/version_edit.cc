@@ -44,6 +44,7 @@ void VersionEdit::EncodeTo(std::string* dst) const {
     PutVarint32(dst, kComparator);
     PutLengthPrefixedSlice(dst, comparator_);
   }
+  // 已compact的最大log文件
   if (has_log_number_) {
     PutVarint32(dst, kLogNumber);
     PutVarint64(dst, log_number_);
@@ -67,12 +68,14 @@ void VersionEdit::EncodeTo(std::string* dst) const {
     PutLengthPrefixedSlice(dst, compact_pointers_[i].second.Encode());
   }
 
+  // 移除哪些sst
   for (const auto& deleted_file_kvp : deleted_files_) {
     PutVarint32(dst, kDeletedFile);
     PutVarint32(dst, deleted_file_kvp.first);   // level
     PutVarint64(dst, deleted_file_kvp.second);  // file number
   }
 
+  // 生成哪些sst
   for (size_t i = 0; i < new_files_.size(); i++) {
     const FileMetaData& f = new_files_[i].second;
     PutVarint32(dst, kNewFile);

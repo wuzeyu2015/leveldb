@@ -30,7 +30,7 @@ Block::Block(const BlockContents& contents)
     size_ = 0;  // Error marker
   } else {
     size_t max_restarts_allowed = (size_ - sizeof(uint32_t)) / sizeof(uint32_t);
-    if (NumRestarts() > max_restarts_allowed) {
+    if (NumRestarts() > max_restarts_allowed) { // 很无聊的检查，看restarts个数对不对
       // The size is too small for NumRestarts()
       size_ = 0;
     } else {
@@ -260,14 +260,15 @@ class Block::Iter : public Iterator {
 
     // Decode next entry
     uint32_t shared, non_shared, value_length;
-    p = DecodeEntry(p, limit, &shared, &non_shared, &value_length);
+    p = DecodeEntry(p, limit, &shared, &non_shared, &value_length); // p指向unshared_key_data
     if (p == nullptr || key_.size() < shared) {
       CorruptionError();
       return false;
     } else {
-      key_.resize(shared);
-      key_.append(p, non_shared);
+      key_.resize(shared);  // 缩到shared长度
+      key_.append(p, non_shared); // 再追加unshared部分
       value_ = Slice(p + non_shared, value_length);
+      // ??????
       while (restart_index_ + 1 < num_restarts_ &&
              GetRestartPoint(restart_index_ + 1) < current_) {
         ++restart_index_;

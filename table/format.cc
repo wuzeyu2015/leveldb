@@ -54,8 +54,10 @@ Status Footer::DecodeFrom(Slice* input) {
     return Status::Corruption("not an sstable (bad magic number)");
   }
 
+  // metaindex block handle变长
   Status result = metaindex_handle_.DecodeFrom(input);
   if (result.ok()) {
+    // index block handle变长
     result = index_handle_.DecodeFrom(input);
   }
   if (result.ok()) {
@@ -75,7 +77,7 @@ Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
   // Read the block contents as well as the type/crc footer.
   // See table_builder.cc for the code that built this structure.
   size_t n = static_cast<size_t>(handle.size());
-  char* buf = new char[n + kBlockTrailerSize];
+  char* buf = new char[n + kBlockTrailerSize];  // content+type+crc
   Slice contents;
   Status s = file->Read(handle.offset(), n + kBlockTrailerSize, &contents, buf);
   if (!s.ok()) {
@@ -90,8 +92,8 @@ Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
   // Check the crc of the type and the block contents
   const char* data = contents.data();  // Pointer to where Read put the data
   if (options.verify_checksums) {
-    const uint32_t crc = crc32c::Unmask(DecodeFixed32(data + n + 1));
-    const uint32_t actual = crc32c::Value(data, n + 1);
+    const uint32_t crc = crc32c::Unmask(DecodeFixed32(data + n + 1)); // 跳过content+type,取出crc
+    const uint32_t actual = crc32c::Value(data, n + 1); // 计算content+type的crc
     if (actual != crc) {
       delete[] buf;
       s = Status::Corruption("block checksum mismatch");
@@ -99,9 +101,9 @@ Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
     }
   }
 
-  switch (data[n]) {
+  switch (data[n]) {  // 看type
     case kNoCompression:
-      if (data != buf) {
+      if (data != buf) {  // 应该是AccessFile可能不会用传入的buf存数据，忽略这个分支
         // File implementation gave us pointer to some other data.
         // Use it directly under the assumption that it will be live
         // while the file is open.

@@ -85,7 +85,7 @@ Version::~Version() {
 }
 
 int FindFile(const InternalKeyComparator& icmp,
-             const std::vector<FileMetaData*>& files, const Slice& key) {
+             const std::vector<FileMetaData*>& files, const Slice& key) { // key是internal key
   uint32_t left = 0;
   uint32_t right = files.size();
   while (left < right) {
@@ -287,13 +287,13 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
   tmp.reserve(files_[0].size());
   for (uint32_t i = 0; i < files_[0].size(); i++) {
     FileMetaData* f = files_[0][i];
-    if (ucmp->Compare(user_key, f->smallest.user_key()) >= 0 &&
+    if (ucmp->Compare(user_key, f->smallest.user_key()) >= 0 && // Level0无序，每个SST都可能包含Internal key(user key+tag)
         ucmp->Compare(user_key, f->largest.user_key()) <= 0) {
       tmp.push_back(f);
     }
   }
   if (!tmp.empty()) {
-    std::sort(tmp.begin(), tmp.end(), NewestFirst);
+    std::sort(tmp.begin(), tmp.end(), NewestFirst); 
     for (uint32_t i = 0; i < tmp.size(); i++) {
       if (!(*func)(arg, 0, tmp[i])) {
         return;
@@ -307,7 +307,7 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
     if (num_files == 0) continue;
 
     // Binary search to find earliest index whose largest key >= internal_key.
-    uint32_t index = FindFile(vset_->icmp_, files_[level], internal_key);
+    uint32_t index = FindFile(vset_->icmp_, files_[level], internal_key); // XXX: 为啥这里不能用user_key二分呢?
     if (index < num_files) {
       FileMetaData* f = files_[level][index];
       if (ucmp->Compare(user_key, f->smallest.user_key()) < 0) {
@@ -351,6 +351,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
       state->last_file_read = f;
       state->last_file_read_level = level;
 
+      // table_cache是记录已经打开过的SST文件
       state->s = state->vset->table_cache_->Get(*state->options, f->number,
                                                 f->file_size, state->ikey,
                                                 &state->saver, SaveValue);
@@ -386,12 +387,12 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
   state.last_file_read_level = -1;
 
   state.options = &options;
-  state.ikey = k.internal_key();
+  state.ikey = k.internal_key();  // user_key+tag
   state.vset = vset_;
 
   state.saver.state = kNotFound;
   state.saver.ucmp = vset_->icmp_.user_comparator();
-  state.saver.user_key = k.user_key();
+  state.saver.user_key = k.user_key();  // user_key
   state.saver.value = value;
 
   ForEachOverlapping(state.saver.user_key, state.ikey, &state, &State::Match);
@@ -678,21 +679,22 @@ class VersionSet::Builder {
       const std::vector<FileMetaData*>& base_files = base_->files_[level];
       std::vector<FileMetaData*>::const_iterator base_iter = base_files.begin();
       std::vector<FileMetaData*>::const_iterator base_end = base_files.end();
-      const FileSet* added_files = levels_[level].added_files;
+      const FileSet* added_files = levels_[level].added_files;  // edit新增的file，也已经有序
+      // 整体添加过程是key range有序的，实现的太风骚，不忍直视
       v->files_[level].reserve(base_files.size() + added_files->size());
-      for (const auto& added_file : *added_files) {
+      for (const auto& added_file : *added_files) { // edit要添加的文件
         // Add all smaller files listed in base_
         for (std::vector<FileMetaData*>::const_iterator bpos =
                  std::upper_bound(base_iter, base_end, added_file, cmp);
              base_iter != bpos; ++base_iter) {
-          MaybeAddFile(v, level, *base_iter);
+          MaybeAddFile(v, level, *base_iter); // 比edit文件key range小的base文件
         }
 
-        MaybeAddFile(v, level, added_file);
+        MaybeAddFile(v, level, added_file); // edit文件本身
       }
 
       // Add remaining base files
-      for (; base_iter != base_end; ++base_iter) {
+      for (; base_iter != base_end; ++base_iter) {  // edit剩余要添加的文件
         MaybeAddFile(v, level, *base_iter);
       }
 
@@ -774,6 +776,7 @@ void VersionSet::AppendVersion(Version* v) {
   v->next_->prev_ = v;
 }
 
+// 这个只是改元信息了，之前已经把SST的IO搞完了
 Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
   if (edit->has_log_number_) {
     assert(edit->log_number_ >= log_number_);
@@ -801,15 +804,15 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
   // a temporary file that contains a snapshot of the current version.
   std::string new_manifest_file;
   Status s;
-  if (descriptor_log_ == nullptr) {
+  if (descriptor_log_ == nullptr) { // manifest文件不存在则首次创建
     // No reason to unlock *mu here since we only hit this path in the
     // first call to LogAndApply (when opening the database).
     assert(descriptor_file_ == nullptr);
-    new_manifest_file = DescriptorFileName(dbname_, manifest_file_number_);
+    new_manifest_file = DescriptorFileName(dbname_, manifest_file_number_); 
     s = env_->NewWritableFile(new_manifest_file, &descriptor_file_);
     if (s.ok()) {
       descriptor_log_ = new log::Writer(descriptor_file_);
-      s = WriteSnapshot(descriptor_log_);
+      s = WriteSnapshot(descriptor_log_); 
     }
   }
 
@@ -818,7 +821,7 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
     mu->Unlock();
 
     // Write new record to MANIFEST log
-    if (s.ok()) {
+    if (s.ok()) { // 追加edit记录到manifest文件
       std::string record;
       edit->EncodeTo(&record);
       s = descriptor_log_->AddRecord(record);
@@ -833,7 +836,7 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
     // If we just created a new descriptor file, install it by writing a
     // new CURRENT file that points to it.
     if (s.ok() && !new_manifest_file.empty()) {
-      s = SetCurrentFile(env_, dbname_, manifest_file_number_);
+      s = SetCurrentFile(env_, dbname_, manifest_file_number_); // 让CURRENT指向MANIFEST，只有MANIFEST首次创建才执行1次，以后再也不会执行这行了
     }
 
     mu->Lock();
@@ -877,9 +880,9 @@ Status VersionSet::Recover(bool* save_manifest) {
   }
   current.resize(current.size() - 1);
 
-  std::string dscname = dbname_ + "/" + current;
+  std::string dscname = dbname_ + "/" + current;  
   SequentialFile* file;
-  s = env_->NewSequentialFile(dscname, &file);
+  s = env_->NewSequentialFile(dscname, &file);  // 打开了manifest
   if (!s.ok()) {
     if (s.IsNotFound()) {
       return Status::Corruption("CURRENT points to a non-existent file",
@@ -896,17 +899,17 @@ Status VersionSet::Recover(bool* save_manifest) {
   uint64_t last_sequence = 0;
   uint64_t log_number = 0;
   uint64_t prev_log_number = 0;
-  Builder builder(this, current_);
+  Builder builder(this, current_);  // 从空version开始，读取edit迭代构建最新version
   int read_records = 0;
 
   {
     LogReporter reporter;
     reporter.status = &s;
     log::Reader reader(file, &reporter, true /*checksum*/,
-                       0 /*initial_offset*/);
+                       0 /*initial_offset*/); // log文件有固定存储格式
     Slice record;
     std::string scratch;
-    while (reader.ReadRecord(&record, &scratch) && s.ok()) {
+    while (reader.ReadRecord(&record, &scratch) && s.ok()) {  // record是log中1条记录，也是一个version edit
       ++read_records;
       VersionEdit edit;
       s = edit.DecodeFrom(record);
@@ -977,7 +980,7 @@ Status VersionSet::Recover(bool* save_manifest) {
     prev_log_number_ = prev_log_number;
 
     // See if we can reuse the existing MANIFEST file.
-    if (ReuseManifest(dscname, current)) {
+    if (ReuseManifest(dscname, current)) {  // manifest追加edit太久太大，重做一个
       // No need to save new manifest
     } else {
       *save_manifest = true;
@@ -1004,11 +1007,11 @@ bool VersionSet::ReuseManifest(const std::string& dscname,
       !env_->GetFileSize(dscname, &manifest_size).ok() ||
       // Make new compacted MANIFEST if old one is too big
       manifest_size >= TargetFileSize(options_)) {
-    return false;
+    return false; // 要重写MANIFEST
   }
 
-  assert(descriptor_file_ == nullptr);
-  assert(descriptor_log_ == nullptr);
+  assert(descriptor_file_ == nullptr);  
+  assert(descriptor_log_ == nullptr); // 如果不reuse manifest，那么这个字段是空的，所以上层会重写一个manifest
   Status r = env_->NewAppendableFile(dscname, &descriptor_file_);
   if (!r.ok()) {
     Log(options_->info_log, "Reuse MANIFEST: %s\n", r.ToString().c_str());
@@ -1147,6 +1150,7 @@ uint64_t VersionSet::ApproximateOffsetOf(Version* v, const InternalKey& ikey) {
 }
 
 void VersionSet::AddLiveFiles(std::set<uint64_t>* live) {
+  // 重要：versionset中每个version中的file都会添加到live中，避免被delete清理掉
   for (Version* v = dummy_versions_.next_; v != &dummy_versions_;
        v = v->next_) {
     for (int level = 0; level < config::kNumLevels; level++) {

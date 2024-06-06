@@ -25,6 +25,7 @@ MemTable::~MemTable() { assert(refs_ == 0); }
 
 size_t MemTable::ApproximateMemoryUsage() { return arena_.MemoryUsage(); }
 
+// Skiplist排序方法
 int MemTable::KeyComparator::operator()(const char* aptr,
                                         const char* bptr) const {
   // Internal keys are encoded as length-prefixed strings.
@@ -100,7 +101,7 @@ void MemTable::Add(SequenceNumber s, ValueType type, const Slice& key,
 }
 
 bool MemTable::Get(const LookupKey& key, std::string* value, Status* s) {
-  Slice memkey = key.memtable_key();
+  Slice memkey = key.memtable_key();// klength+userkey+tag
   Table::Iterator iter(&table_);
   iter.Seek(memkey.data());
   if (iter.Valid()) {

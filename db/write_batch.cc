@@ -133,7 +133,7 @@ Status WriteBatchInternal::InsertInto(const WriteBatch* b, MemTable* memtable) {
   MemTableInserter inserter;
   inserter.sequence_ = WriteBatchInternal::Sequence(b);
   inserter.mem_ = memtable;
-  return b->Iterate(&inserter);
+  return b->Iterate(&inserter); // write batch中每个key-value插入mem table
 }
 
 void WriteBatchInternal::SetContents(WriteBatch* b, const Slice& contents) {

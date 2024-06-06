@@ -96,7 +96,7 @@ Status Writer::EmitPhysicalRecord(RecordType t, const char* ptr,
   EncodeFixed32(buf, crc);
 
   // Write the header and the payload
-  Status s = dest_->Append(Slice(buf, kHeaderSize));
+  Status s = dest_->Append(Slice(buf, kHeaderSize));  // buf=crc+length+type
   if (s.ok()) {
     s = dest_->Append(Slice(ptr, length));
     if (s.ok()) {
