@@ -76,7 +76,7 @@ struct DBImpl::CompactionState {
   // we can drop all entries for the same key with sequence numbers < S.
   SequenceNumber smallest_snapshot;
 
-  std::vector<Output> outputs;
+  std::vector<Output> outputs;  // 1次SST merge可能会写出多个SST
 
   // State kept for output being generated
   WritableFile* outfile;
@@ -806,7 +806,7 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
   {
     mutex_.Lock();
     file_number = versions_->NewFileNumber();
-    pending_outputs_.insert(file_number);
+    pending_outputs_.insert(file_number); // 正在写入的SST标识，避免被垃圾文件清理给带走
     CompactionState::Output out;
     out.number = file_number;
     out.smallest.Clear();
@@ -852,7 +852,7 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
     s = compact->outfile->Sync();
   }
   if (s.ok()) {
-    s = compact->outfile->Close();
+    s = compact->outfile->Close();  // 写到SST关闭SST
   }
   delete compact->outfile;
   compact->outfile = nullptr;
@@ -875,20 +875,21 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
 
 Status DBImpl::InstallCompactionResults(CompactionState* compact) {
   mutex_.AssertHeld();
+  // 2个SST文件合并完成
   Log(options_.info_log, "Compacted %d@%d + %d@%d files => %lld bytes",
       compact->compaction->num_input_files(0), compact->compaction->level(),
       compact->compaction->num_input_files(1), compact->compaction->level() + 1,
       static_cast<long long>(compact->total_bytes));
 
   // Add compaction outputs
-  compact->compaction->AddInputDeletions(compact->compaction->edit());
+  compact->compaction->AddInputDeletions(compact->compaction->edit());  // version的变更1）删除2个被合并的SST
   const int level = compact->compaction->level();
-  for (size_t i = 0; i < compact->outputs.size(); i++) {
+  for (size_t i = 0; i < compact->outputs.size(); i++) {  // version的变更2）合并出了N个SST
     const CompactionState::Output& out = compact->outputs[i];
     compact->compaction->edit()->AddFile(level + 1, out.number, out.file_size,
                                          out.smallest, out.largest);
   }
-  return versions_->LogAndApply(compact->compaction->edit(), &mutex_);
+  return versions_->LogAndApply(compact->compaction->edit(), &mutex_);  // 产生新version
 }
 
 Status DBImpl::DoCompactionWork(CompactionState* compact) {
@@ -906,7 +907,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   if (snapshots_.empty()) {
     compact->smallest_snapshot = versions_->LastSequence();
   } else {
-    compact->smallest_snapshot = snapshots_.oldest()->sequence_number();
+    compact->smallest_snapshot = snapshots_.oldest()->sequence_number();  // 最早的snaphost版本
   }
 
   Iterator* input = versions_->MakeInputIterator(compact->compaction);
@@ -914,17 +915,18 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   // Release mutex while we're actually doing the compaction work
   mutex_.Unlock();  // compact过程是不需要锁的，因为current的最终引用在versionset手里，且current里面的sst是imutable的
 
+  // 开始merge多个sst
   input->SeekToFirst();
   Status status;
   ParsedInternalKey ikey;
   std::string current_user_key;
   bool has_current_user_key = false;
-  SequenceNumber last_sequence_for_key = kMaxSequenceNumber;
+  SequenceNumber last_sequence_for_key = kMaxSequenceNumber;  // 当前ukey上一次seq id
   while (input->Valid() && !shutting_down_.load(std::memory_order_acquire)) {
     // Prioritize immutable compaction work
     if (has_imm_.load(std::memory_order_relaxed)) {
       const uint64_t imm_start = env_->NowMicros();
-      mutex_.Lock();
+      mutex_.Lock();          // 避免sst merge期间mem打满，穿插mem compact
       if (imm_ != nullptr) {
         CompactMemTable();  // imm的compact，不需要担心并发，因为imm也是不可变的，只有compact线程会修改imm字段
         // Wake up MakeRoomForWrite() if necessary.
@@ -951,19 +953,20 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
       has_current_user_key = false;
       last_sequence_for_key = kMaxSequenceNumber;
     } else {
+      // 遇到新的ukey
       if (!has_current_user_key ||
           user_comparator()->Compare(ikey.user_key, Slice(current_user_key)) !=
               0) {
         // First occurrence of this user key
         current_user_key.assign(ikey.user_key.data(), ikey.user_key.size());
         has_current_user_key = true;
-        last_sequence_for_key = kMaxSequenceNumber;
+        last_sequence_for_key = kMaxSequenceNumber; // 首次遇到Ukey，没有上一次seq id
       }
 
-      if (last_sequence_for_key <= compact->smallest_snapshot) {
+      if (last_sequence_for_key <= compact->smallest_snapshot) {    // 如果snapshot是T时刻的，那么T-1以前的变更是允许合并掉的
         // Hidden by an newer entry for same user key
         drop = true;  // (A)
-      } else if (ikey.type == kTypeDeletion &&
+      } else if (ikey.type == kTypeDeletion &&      // 如果该ukey在下层level都没出现过，那么这个del ukey记录也不必留存
                  ikey.sequence <= compact->smallest_snapshot &&
                  compact->compaction->IsBaseLevelForKey(ikey.user_key)) {
         // For this user key:
@@ -976,7 +979,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
         drop = true;
       }
 
-      last_sequence_for_key = ikey.sequence;
+      last_sequence_for_key = ikey.sequence;  // 当前ukey上一次seq id
     }
 #if 0
     Log(options_.info_log,
@@ -988,6 +991,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
         (int)last_sequence_for_key, (int)compact->smallest_snapshot);
 #endif
 
+    // 向合并后的SST插入这条entry
     if (!drop) {
       // Open output file if necessary
       if (compact->builder == nullptr) {
@@ -1005,7 +1009,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
       // Close output file if it is big enough
       if (compact->builder->FileSize() >=
           compact->compaction->MaxOutputFileSize()) {
-        status = FinishCompactionOutputFile(compact, input);
+        status = FinishCompactionOutputFile(compact, input);  // SST太大落盘1个文件
         if (!status.ok()) {
           break;
         }
@@ -1019,7 +1023,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
     status = Status::IOError("Deleting DB during compaction");
   }
   if (status.ok() && compact->builder != nullptr) {
-    status = FinishCompactionOutputFile(compact, input);
+    status = FinishCompactionOutputFile(compact, input);  // 剩余在builder中的数据再落1次SST
   }
   if (status.ok()) {
     status = input->status();

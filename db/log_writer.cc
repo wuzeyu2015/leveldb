@@ -86,8 +86,10 @@ Status Writer::EmitPhysicalRecord(RecordType t, const char* ptr,
 
   // Format the header
   char buf[kHeaderSize];
+  // length字节低位在前
   buf[4] = static_cast<char>(length & 0xff);
   buf[5] = static_cast<char>(length >> 8);
+  // 1字节type
   buf[6] = static_cast<char>(t);
 
   // Compute the crc of the record type and the payload.

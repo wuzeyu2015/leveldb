@@ -69,7 +69,7 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
 
   Slice fragment;
   while (true) {
-    const unsigned int record_type = ReadPhysicalRecord(&fragment);
+    const unsigned int record_type = ReadPhysicalRecord(&fragment); // 1个part
 
     // ReadPhysicalRecord may have only had an empty trailer remaining in its
     // internal buffer. Calculate the offset of the next physical record now
@@ -115,7 +115,7 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
             ReportCorruption(scratch->size(), "partial record without end(2)");
           }
         }
-        prospective_record_offset = physical_record_offset;
+        prospective_record_offset = physical_record_offset; // first part，记录正在读的record的offset
         scratch->assign(fragment.data(), fragment.size());
         in_fragmented_record = true;
         break;
@@ -136,7 +136,7 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
         } else {
           scratch->append(fragment.data(), fragment.size());
           *record = Slice(*scratch);
-          last_record_offset_ = prospective_record_offset;
+          last_record_offset_ = prospective_record_offset;  // last part，记录已读完的record的Offset
           return true;
         }
         break;
@@ -188,18 +188,19 @@ void Reader::ReportDrop(uint64_t bytes, const Status& reason) {
 
 unsigned int Reader::ReadPhysicalRecord(Slice* result) {
   while (true) {
-    if (buffer_.size() < kHeaderSize) {
+    if (buffer_.size() < kHeaderSize) { // 其实就是每次读1个block，如果读不到1个block说明EOF
+      //  如果block剩余小于header size，说明是填充部分
       if (!eof_) {
         // Last read was a full read, so this is a trailer to skip
         buffer_.clear();
-        Status status = file_->Read(kBlockSize, &buffer_, backing_store_);
+        Status status = file_->Read(kBlockSize, &buffer_, backing_store_);  // 读1个Block大小进来
         end_of_buffer_offset_ += buffer_.size();
         if (!status.ok()) {
           buffer_.clear();
           ReportDrop(kBlockSize, status);
           eof_ = true;
           return kEof;
-        } else if (buffer_.size() < kBlockSize) {
+        } else if (buffer_.size() < kBlockSize) { // 不足Block说明EOF了，但buffer里的数据也要处理
           eof_ = true;
         }
         continue;
@@ -219,7 +220,7 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
     const uint32_t b = static_cast<uint32_t>(header[5]) & 0xff;
     const unsigned int type = header[6];
     const uint32_t length = a | (b << 8);
-    if (kHeaderSize + length > buffer_.size()) {
+    if (kHeaderSize + length > buffer_.size()) {  // 任何1个part都不会超出block大小
       size_t drop_size = buffer_.size();
       buffer_.clear();
       if (!eof_) {
@@ -256,7 +257,7 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
       }
     }
 
-    buffer_.remove_prefix(kHeaderSize + length);
+    buffer_.remove_prefix(kHeaderSize + length);  // 解析出1个part,消耗buffer
 
     // Skip physical record that started before initial_offset_
     if (end_of_buffer_offset_ - buffer_.size() - kHeaderSize - length <
