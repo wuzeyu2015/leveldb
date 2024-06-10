@@ -520,7 +520,7 @@ void Version::GetOverlappingInputs(int level, const InternalKey* begin,
       // "f" is completely after specified range; skip it
     } else {
       inputs->push_back(f);
-      if (level == 0) {
+      if (level == 0) { // 随着level0进来，更多的level0被覆盖，level0的overlap会变大，所以持续扩大sst范围
         // Level-0 files may overlap each other.  So check if the newly
         // added file has expanded the range.  If so, restart search.
         if (begin != nullptr && user_cmp->Compare(file_start, user_begin) < 0) {
@@ -1031,6 +1031,7 @@ void VersionSet::MarkFileNumberUsed(uint64_t number) {
   }
 }
 
+// 在version中选择最值得compact的level
 void VersionSet::Finalize(Version* v) {
   // Precomputed best level for next compaction
   int best_level = -1;
@@ -1261,7 +1262,7 @@ Compaction* VersionSet::PickCompaction() {
   // the compactions triggered by seeks.
   const bool size_compaction = (current_->compaction_score_ >= 1);
   const bool seek_compaction = (current_->file_to_compact_ != nullptr);
-  if (size_compaction) {
+  if (size_compaction) {  // 策略1）基于score的compact选取策略，此前Finalize已经选好了level i
     level = current_->compaction_level_;
     assert(level >= 0);
     assert(level + 1 < config::kNumLevels);
@@ -1271,16 +1272,16 @@ Compaction* VersionSet::PickCompaction() {
     for (size_t i = 0; i < current_->files_[level].size(); i++) {
       FileMetaData* f = current_->files_[level][i];
       if (compact_pointer_[level].empty() ||
-          icmp_.Compare(f->largest.Encode(), compact_pointer_[level]) > 0) {
-        c->inputs_[0].push_back(f);
-        break;
+          icmp_.Compare(f->largest.Encode(), compact_pointer_[level]) > 0) {  // compact_pointer是每层level的一个轮转指针，确保每个sst都陆续排队参与compact
+        c->inputs_[0].push_back(f); // 只选1个SST就break
+        break; 
       }
     }
     if (c->inputs_[0].empty()) {
       // Wrap-around to the beginning of the key space
-      c->inputs_[0].push_back(current_->files_[level][0]);
+      c->inputs_[0].push_back(current_->files_[level][0]);  // compact_pointer后没有SST可以参与compact，那么选本层第0个文件即可
     }
-  } else if (seek_compaction) {
+  } else if (seek_compaction) { //  策略2）基于Get时miss的统计计算出的1个SST，直接对它compact
     level = current_->file_to_compact_level_;
     c = new Compaction(options_, level);
     c->inputs_[0].push_back(current_->file_to_compact_);
@@ -1292,17 +1293,17 @@ Compaction* VersionSet::PickCompaction() {
   c->input_version_->Ref();
 
   // Files in level 0 may overlap each other, so pick up all overlapping ones
-  if (level == 0) {
+  if (level == 0) { // level0的sst作为compact发起者的时候，需要把同层overlap的sst都加进来
     InternalKey smallest, largest;
-    GetRange(c->inputs_[0], &smallest, &largest);
+    GetRange(c->inputs_[0], &smallest, &largest);   //  统计这些主动发起compact SST的最小和最大key
     // Note that the next call will discard the file we placed in
     // c->inputs_[0] earlier and replace it with an overlapping set
     // which will include the picked file.
-    current_->GetOverlappingInputs(0, &smallest, &largest, &c->inputs_[0]);
+    current_->GetOverlappingInputs(0, &smallest, &largest, &c->inputs_[0]); // 把level0中overlap的其他SST找出来
     assert(!c->inputs_[0].empty());
   }
 
-  SetupOtherInputs(c);
+  SetupOtherInputs(c);  // 扩展level层的SST范围（牵扯的到同key的多个版本跨SST边界问题），然后与level+1层求overlap的sst
 
   return c;
 }
@@ -1367,18 +1368,18 @@ void AddBoundaryInputs(const InternalKeyComparator& icmp,
   InternalKey largest_key;
 
   // Quick return if compaction_files is empty.
-  if (!FindLargestKey(icmp, *compaction_files, &largest_key)) {
+  if (!FindLargestKey(icmp, *compaction_files, &largest_key)) {   // 除了level0会牵扯多个SST，其他level就1个SST，取出它的最大key
     return;
   }
 
   bool continue_searching = true;
   while (continue_searching) {
     FileMetaData* smallest_boundary_file =
-        FindSmallestBoundaryFile(icmp, level_files, largest_key);
+        FindSmallestBoundaryFile(icmp, level_files, largest_key);   // 找到左界和largest_key一样ukey且紧邻其后的SST
 
     // If a boundary file was found advance largest_key, otherwise we're done.
     if (smallest_boundary_file != NULL) {
-      compaction_files->push_back(smallest_boundary_file);
+      compaction_files->push_back(smallest_boundary_file);  // ukey跨边界的sst也拉进来要一起compact下去才行
       largest_key = smallest_boundary_file->largest;
     } else {
       continue_searching = false;
@@ -1386,24 +1387,28 @@ void AddBoundaryInputs(const InternalKeyComparator& icmp,
   }
 }
 
+// compact代码的灵魂函数，level和level+1层SST合并文件挑选逻辑
 void VersionSet::SetupOtherInputs(Compaction* c) {
   const int level = c->level();
   InternalKey smallest, largest;
 
-  AddBoundaryInputs(icmp_, current_->files_[level], &c->inputs_[0]);
-  GetRange(c->inputs_[0], &smallest, &largest);
+  AddBoundaryInputs(icmp_, current_->files_[level], &c->inputs_[0]);  // ukey跨sst场景，扩展compact文件清单
+  GetRange(c->inputs_[0], &smallest, &largest); 
 
+  // level+1层ukey有重叠的所有SST，把它们重新merge起来，放到level+1层，删掉被merge的SST们
   current_->GetOverlappingInputs(level + 1, &smallest, &largest,
                                  &c->inputs_[1]);
-  AddBoundaryInputs(icmp_, current_->files_[level + 1], &c->inputs_[1]);
+  AddBoundaryInputs(icmp_, current_->files_[level + 1], &c->inputs_[1]);  // ??? 扩展level+1有啥意义，应该不影响ukey跨sst场景的正确性吧
 
   // Get entire range covered by compaction
   InternalKey all_start, all_limit;
-  GetRange2(c->inputs_[0], c->inputs_[1], &all_start, &all_limit);
+  GetRange2(c->inputs_[0], c->inputs_[1], &all_start, &all_limit);  // 两层SST的key范围合集
 
   // See if we can grow the number of inputs in "level" without
   // changing the number of "level+1" files we pick up.
+  // 在不invole更多level+1 sst的情况下，继续向两侧找到更多level层的sst进来一起merge下去
   if (!c->inputs_[1].empty()) {
+    // 从level i扩展更多SST
     std::vector<FileMetaData*> expanded0;
     current_->GetOverlappingInputs(level, &all_start, &all_limit, &expanded0);
     AddBoundaryInputs(icmp_, current_->files_[level], &expanded0);
@@ -1412,14 +1417,16 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
     const int64_t expanded0_size = TotalFileSize(expanded0);
     if (expanded0.size() > c->inputs_[0].size() &&
         inputs1_size + expanded0_size <
-            ExpandedCompactionByteSizeLimit(options_)) {
+            ExpandedCompactionByteSizeLimit(options_)) {  // level i扩展的SST总大小+level i+1的SST总大小在允许范围
+
+      // 用扩展后的level i SST，去level i+1找到overlap的SST，存到expanded1数组
       InternalKey new_start, new_limit;
-      GetRange(expanded0, &new_start, &new_limit);
+      GetRange(expanded0, &new_start, &new_limit);  
       std::vector<FileMetaData*> expanded1;
       current_->GetOverlappingInputs(level + 1, &new_start, &new_limit,
                                      &expanded1);
       AddBoundaryInputs(icmp_, current_->files_[level + 1], &expanded1);
-      if (expanded1.size() == c->inputs_[1].size()) {
+      if (expanded1.size() == c->inputs_[1].size()) { // 没有引入更多level i+1的SST，那么level i的SST扩展是划算的，一起compact下去
         Log(options_->info_log,
             "Expanding@%d %d+%d (%ld+%ld bytes) to %d+%d (%ld+%ld bytes)\n",
             level, int(c->inputs_[0].size()), int(c->inputs_[1].size()),
@@ -1436,6 +1443,8 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
 
   // Compute the set of grandparent files that overlap this compaction
   // (parent == level+1; grandparent == level+2)
+
+  // 计算level+2层级与本次compact重叠的SST，后续有其他用途具体还没看，不影响本次
   if (level + 2 < config::kNumLevels) {
     current_->GetOverlappingInputs(level + 2, &all_start, &all_limit,
                                    &c->grandparents_);
@@ -1445,7 +1454,7 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
   // We update this immediately instead of waiting for the VersionEdit
   // to be applied so that if the compaction fails, we will try a different
   // key range next time.
-  compact_pointer_[level] = largest.Encode().ToString();
+  compact_pointer_[level] = largest.Encode().ToString();  // 本次Level i被合并的最大SST key，下次从这个比这个key更大的sst文件继续
   c->edit_.SetCompactPointer(level, largest);
 }
 

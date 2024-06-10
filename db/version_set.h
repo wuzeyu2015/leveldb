@@ -157,10 +157,11 @@ class Version {
   FileMetaData* file_to_compact_;
   int file_to_compact_level_;
 
+  // 对每个level的compact打分，每次verisonedit执行后会重新评估一轮
   // Level that should be compacted next and its compaction score.
   // Score < 1 means compaction is not strictly needed.  These fields
-  // are initialized by Finalize().
-  double compaction_score_;
+  // are initialized by Finalize(). 
+  double compaction_score_; 
   int compaction_level_;
 };
 
