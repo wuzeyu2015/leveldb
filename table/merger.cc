@@ -48,7 +48,7 @@ class MergingIterator : public Iterator {
     for (int i = 0; i < n_; i++) {
       children_[i].Seek(target);
     }
-    FindSmallest();
+    FindSmallest(); // 选择key最小的iterator
     direction_ = kForward;
   }
 
@@ -74,8 +74,8 @@ class MergingIterator : public Iterator {
       direction_ = kForward;
     }
 
-    current_->Next();
-    FindSmallest();
+    current_->Next(); // key最小的iter前进一步
+    FindSmallest(); // 再次看谁是key最小的iter
   }
 
   void Prev() override {

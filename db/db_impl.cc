@@ -731,7 +731,7 @@ void DBImpl::BackgroundCompaction() {
   Status status;
   if (c == nullptr) {
     // Nothing to do
-  } else if (!is_manual && c->IsTrivialMove()) {  // sst没有和下一层重叠，直接move到下一层即可
+  } else if (!is_manual && c->IsTrivialMove()) {  // level i只有1个SST，且和level i+1的SST没有任何overlap，可以直接移动到level i+1
     // Move file to next level
     assert(c->num_input_files(0) == 1);
     FileMetaData* f = c->input(0, 0);
@@ -892,8 +892,8 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
   return versions_->LogAndApply(compact->compaction->edit(), &mutex_);  // 产生新version
 }
 
-Status DBImpl::DoCompactionWork(CompactionState* compact) {
   const uint64_t start_micros = env_->NowMicros();
+Status DBImpl::DoCompactionWork(CompactionState* compact) {
   int64_t imm_micros = 0;  // Micros spent doing imm_ compactions
 
   Log(options_.info_log, "Compacting %d@%d + %d@%d files",

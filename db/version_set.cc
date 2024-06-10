@@ -1221,6 +1221,7 @@ void VersionSet::GetRange2(const std::vector<FileMetaData*>& inputs1,
   GetRange(all, smallest, largest);
 }
 
+// 将多个要merge的SST封装成1个iterator
 Iterator* VersionSet::MakeInputIterator(Compaction* c) {
   ReadOptions options;
   options.verify_checksums = options_->paranoid_checks;
@@ -1229,7 +1230,7 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
   // Level-0 files have to be merged together.  For other levels,
   // we will make a concatenating iterator per level.
   // TODO(opt): use concatenating iterator for level-0 if there is no overlap
-  const int space = (c->level() == 0 ? c->inputs_[0].size() + 1 : 2);
+  const int space = (c->level() == 0 ? c->inputs_[0].size() + 1 : 2); // 如果level i=0，那么level 0中每个SST都有独立的iter，非level 0每一层1个iter（因为非level 0整体有序）
   Iterator** list = new Iterator*[space];
   int num = 0;
   for (int which = 0; which < 2; which++) {
@@ -1242,8 +1243,9 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
         }
       } else {
         // Create concatenating iterator for the files from this level
-        list[num++] = NewTwoLevelIterator(
-            new Version::LevelFileNumIterator(icmp_, &c->inputs_[which]),
+        // 
+        list[num++] = NewTwoLevelIterator( // 在level中打开1个entry iterator，依次遍历到N个SST文件
+            new Version::LevelFileNumIterator(icmp_, &c->inputs_[which]), // 对应level的SST文件名迭代器
             &GetFileIterator, table_cache_, options);
       }
     }
