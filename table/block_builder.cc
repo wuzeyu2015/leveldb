@@ -59,6 +59,7 @@ size_t BlockBuilder::CurrentSizeEstimate() const {
 }
 
 Slice BlockBuilder::Finish() {
+  // 每个block末尾是restarts信息
   // Append restart array
   for (size_t i = 0; i < restarts_.size(); i++) {
     PutFixed32(&buffer_, restarts_[i]);
@@ -68,36 +69,42 @@ Slice BlockBuilder::Finish() {
   return Slice(buffer_);
 }
 
+// Block里面有N个key-value entry，每间隔N个retart_interval个key-value就会停止共享key前缀重新1个restart点
 void BlockBuilder::Add(const Slice& key, const Slice& value) {
   Slice last_key_piece(last_key_);
   assert(!finished_);
   assert(counter_ <= options_->block_restart_interval);
   assert(buffer_.empty()  // No values yet?
          || options_->comparator->Compare(key, last_key_piece) > 0);
-  size_t shared = 0;
-  if (counter_ < options_->block_restart_interval) {
+  size_t shared = 0;  
+  if (counter_ < options_->block_restart_interval) { 
     // See how much sharing to do with previous string
+    // 计算和前1个key的共同前缀
     const size_t min_length = std::min(last_key_piece.size(), key.size());
     while ((shared < min_length) && (last_key_piece[shared] == key[shared])) {
       shared++;
     }
   } else {
     // Restart compression
-    restarts_.push_back(buffer_.size());
+    // restart点用于在block内做2分查找用，因为每个restart点位置的key是不共享前面prefix的，可以直接拿来二分快速定位restart段
+    restarts_.push_back(buffer_.size());  // 记录restart点，此时shared=0
     counter_ = 0;
   }
-  const size_t non_shared = key.size() - shared;
+  const size_t non_shared = key.size() - shared; 
 
+  // 共享长度+非共享长度+value长度
   // Add "<shared><non_shared><value_size>" to buffer_
   PutVarint32(&buffer_, shared);
   PutVarint32(&buffer_, non_shared);
   PutVarint32(&buffer_, value.size());
 
   // Add string delta to buffer_ followed by value
+  // 非共享key内容+value内容
   buffer_.append(key.data() + shared, non_shared);
   buffer_.append(value.data(), value.size());
 
   // Update state
+  // 更新last key
   last_key_.resize(shared);
   last_key_.append(key.data() + shared, non_shared);
   assert(Slice(last_key_) == key);

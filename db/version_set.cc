@@ -292,6 +292,7 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
       tmp.push_back(f);
     }
   }
+  // level0从新SST到旧SST检查key是否存在
   if (!tmp.empty()) {
     std::sort(tmp.begin(), tmp.end(), NewestFirst); 
     for (uint32_t i = 0; i < tmp.size(); i++) {
@@ -1542,10 +1543,10 @@ bool Compaction::IsBaseLevelForKey(const Slice& user_key) {
           // Key falls in this file's range, so definitely not base level
           return false;
         }
-        break;
+        break;  // 没有overlay的下层SST（从grandparent开始）
       }
-      level_ptrs_[lvl]++;
     }
+    level_ptrs_[lvl]++; // 当前ukey已超过当前File，继续后移File位置，后续merge iter由于ukey递增，所以也不需要反复查前面的file了，极限优化啊
   }
   return true;
 }

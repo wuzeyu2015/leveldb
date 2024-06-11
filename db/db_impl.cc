@@ -799,6 +799,7 @@ void DBImpl::CleanupCompaction(CompactionState* compact) {
   delete compact;
 }
 
+// 新建1个SST空文件
 Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
   assert(compact != nullptr);
   assert(compact->builder == nullptr);
@@ -960,7 +961,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
         // First occurrence of this user key
         current_user_key.assign(ikey.user_key.data(), ikey.user_key.size());
         has_current_user_key = true;
-        last_sequence_for_key = kMaxSequenceNumber; // 首次遇到Ukey，没有上一次seq id
+        last_sequence_for_key = kMaxSequenceNumber; // 首次遇到ukey，没有上一次seq id
       }
 
       if (last_sequence_for_key <= compact->smallest_snapshot) {    // 如果snapshot是T时刻的，那么T-1以前的变更是允许合并掉的
@@ -1001,9 +1002,9 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
         }
       }
       if (compact->builder->NumEntries() == 0) {
-        compact->current_output()->smallest.DecodeFrom(key);
+        compact->current_output()->smallest.DecodeFrom(key);  // 记录SST写入的第1个key（也是最小的Key）
       }
-      compact->current_output()->largest.DecodeFrom(key);
+      compact->current_output()->largest.DecodeFrom(key); // 更新SST的最后1个key（也是最大的Key）
       compact->builder->Add(key, input->value());
 
       // Close output file if it is big enough

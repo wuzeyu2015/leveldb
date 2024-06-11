@@ -99,15 +99,23 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
     assert(r->options.comparator->Compare(key, Slice(r->last_key)) > 0);
   }
 
+  /**
+   * 我们直到看到下一个数据块的第一个键之后，才会发出当前块的索引条目。这样做能够使我们在索引块中使用更短的键。
+   * 例如，想象一个块边界位于键"the quick brown fox"和"the who"之间。我们可以使用"the r"作为索引块条目的键，因为它大于等于第一个块中的所有条目且小于后续块中的所有条目。
+   * 
+   */
   if (r->pending_index_entry) {
     assert(r->data_block.empty());
-    r->options.comparator->FindShortestSeparator(&r->last_key, key);
+    r->options.comparator->FindShortestSeparator(&r->last_key, key); // 这是极限优化，其实拿last key当block的range标识也可以
     std::string handle_encoding;
-    r->pending_handle.EncodeTo(&handle_encoding);
-    r->index_block.Add(r->last_key, Slice(handle_encoding));
+    r->pending_handle.EncodeTo(&handle_encoding); // 把上1个data block的offset+size序列化写入index block
+    // 1，写入index block，用data block last key作为key,值是data block偏移量
+    // 2，index block就1个，不像data block一样有N个
+    r->index_block.Add(r->last_key, Slice(handle_encoding)); 
     r->pending_index_entry = false;
   }
-
+  
+  // bloom过滤器相关，先不看
   if (r->filter_block != nullptr) {
     r->filter_block->AddKey(key);
   }
@@ -115,7 +123,9 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
   r->last_key.assign(key.data(), key.size());
   r->num_entries++;
   r->data_block.Add(key, value);  // entry加入data block，SST构造细节后面再看
-
+  
+  // 当前data block大小足够大了，要结束这个block新建1个block，也是避免OOM也是为了后续扫描速度快
+  // 也就是block内有多个restart，上层又有多个block，提供了2级索引结构加速key定位
   const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
   if (estimated_block_size >= r->options.block_size) {
     Flush();  // data block落盘
@@ -130,7 +140,7 @@ void TableBuilder::Flush() {
   assert(!r->pending_index_entry);
   WriteBlock(&r->data_block, &r->pending_handle);
   if (ok()) {
-    r->pending_index_entry = true;
+    r->pending_index_entry = true;  // 写完1个data block之后触发index block写入
     r->status = r->file->Flush();
   }
   if (r->filter_block != nullptr) {
@@ -138,6 +148,7 @@ void TableBuilder::Flush() {
   }
 }
 
+// 写入1个block块，由数据+type+crc构成，type是压缩类型
 void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
   // File format contains a sequence of blocks where each block has:
   //    block_data: uint8[n]
@@ -186,12 +197,13 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
   }
   WriteRawBlock(block_contents, type, handle);
   r->compressed_output.clear();
-  block->Reset();
+  block->Reset(); // 清空block继续构造下1个
 }
 
 void TableBuilder::WriteRawBlock(const Slice& block_contents,
                                  CompressionType type, BlockHandle* handle) {
   Rep* r = rep_;
+  // 记录这个data block的offset+size，用于构建index block用
   handle->set_offset(r->offset);
   handle->set_size(block_contents.size());
   r->status = r->file->Append(block_contents);
@@ -219,11 +231,13 @@ Status TableBuilder::Finish() {
   BlockHandle filter_block_handle, metaindex_block_handle, index_block_handle;
 
   // Write filter block
+  // bloom过滤器
   if (ok() && r->filter_block != nullptr) {
     WriteRawBlock(r->filter_block->Finish(), kNoCompression,
                   &filter_block_handle);
   }
 
+  // 这个应该没有用，metaindex block
   // Write metaindex block
   if (ok()) {
     BlockBuilder meta_index_block(&r->options);
@@ -239,7 +253,8 @@ Status TableBuilder::Finish() {
     // TODO(postrelease): Add stats and other meta blocks
     WriteBlock(&meta_index_block, &metaindex_block_handle);
   }
-
+  
+  // 把index block
   // Write index block
   if (ok()) {
     if (r->pending_index_entry) {
