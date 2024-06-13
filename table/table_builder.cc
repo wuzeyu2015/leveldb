@@ -122,7 +122,7 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
 
   r->last_key.assign(key.data(), key.size());
   r->num_entries++;
-  r->data_block.Add(key, value);  // entry加入data block，SST构造细节后面再看
+  r->data_block.Add(key, value);  // entry加入data block
   
   // 当前data block大小足够大了，要结束这个block新建1个block，也是避免OOM也是为了后续扫描速度快
   // 也就是block内有多个restart，上层又有多个block，提供了2级索引结构加速key定位
@@ -140,7 +140,7 @@ void TableBuilder::Flush() {
   assert(!r->pending_index_entry);
   WriteBlock(&r->data_block, &r->pending_handle);
   if (ok()) {
-    r->pending_index_entry = true;  // 写完1个data block之后触发index block写入
+    r->pending_index_entry = true;  // 写完1个data block之后触发index block更新内存数据
     r->status = r->file->Flush();
   }
   if (r->filter_block != nullptr) {
@@ -237,7 +237,7 @@ Status TableBuilder::Finish() {
                   &filter_block_handle);
   }
 
-  // 这个应该没有用，metaindex block
+  // metaindex里面就记录bloom filter的位置
   // Write metaindex block
   if (ok()) {
     BlockBuilder meta_index_block(&r->options);

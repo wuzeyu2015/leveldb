@@ -221,7 +221,7 @@ Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
     Slice handle_value = iiter->value();  // index block的entry key是internal key，而entry value是block handle指向data block的一个位置
     FilterBlockReader* filter = rep_->filter;
     BlockHandle handle;
-    if (filter != nullptr && handle.DecodeFrom(&handle_value).ok() && // 应该是bloom过滤器，后续看下细节，先不看这块
+    if (filter != nullptr && handle.DecodeFrom(&handle_value).ok() && // 通过index block找到datablock，根据datablock offset可以找到对应的bloom filter，快速check key在不在block内
         !filter->KeyMayMatch(handle.offset(), k)) {
       // Not found
     } else {
