@@ -306,7 +306,7 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
     if (options_.create_if_missing) {
       Log(options_.info_log, "Creating DB %s since it was missing.",
           dbname_.c_str());
-      s = NewDB();  // DB首次打开，初始化它
+      s = NewDB();  // DB首次打开，初始化versionset
       if (!s.ok()) {
         return s;
       }

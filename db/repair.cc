@@ -42,6 +42,7 @@ namespace leveldb {
 
 namespace {
 
+// 假设manifest有严重损毁无法读取，那么基于log,SST做manifest重建
 class Repairer {
  public:
   Repairer(const std::string& dbname, const Options& options)
@@ -68,9 +69,10 @@ class Repairer {
   }
 
   Status Run() {
+    // 1,扫描磁盘上log,sst,manifest这些文件，记录最大file number
     Status status = FindFiles();
     if (status.ok()) {
-      ConvertLogFilesToTables();
+      ConvertLogFilesToTables();  // 2,log转sst
       ExtractMetaData();
       status = WriteDescriptor();
     }
@@ -110,14 +112,14 @@ class Repairer {
     for (size_t i = 0; i < filenames.size(); i++) {
       if (ParseFileName(filenames[i], &number, &type)) {
         if (type == kDescriptorFile) {
-          manifests_.push_back(filenames[i]);
+          manifests_.push_back(filenames[i]); // manifest
         } else {
           if (number + 1 > next_file_number_) {
-            next_file_number_ = number + 1;
+            next_file_number_ = number + 1; // 下一个文件分配序号
           }
-          if (type == kLogFile) {
+          if (type == kLogFile) { // wal log
             logs_.push_back(number);
-          } else if (type == kTableFile) {
+          } else if (type == kTableFile) {  // sst
             table_numbers_.push_back(number);
           } else {
             // Ignore other files
@@ -131,12 +133,12 @@ class Repairer {
   void ConvertLogFilesToTables() {
     for (size_t i = 0; i < logs_.size(); i++) {
       std::string logname = LogFileName(dbname_, logs_[i]);
-      Status status = ConvertLogToTable(logs_[i]);
+      Status status = ConvertLogToTable(logs_[i]);  // log落sst
       if (!status.ok()) {
         Log(options_.info_log, "Log #%llu: ignoring conversion error: %s",
             (unsigned long long)logs_[i], status.ToString().c_str());
       }
-      ArchiveFile(logname);
+      ArchiveFile(logname); // log移到lost目录下归档
     }
   }
 
@@ -174,6 +176,7 @@ class Repairer {
                        0 /*initial_offset*/);
 
     // Read all the records and add to a memtable
+    // 把这个log文件重做到1个空的memtable中
     std::string scratch;
     Slice record;
     WriteBatch batch;
@@ -200,9 +203,12 @@ class Repairer {
 
     // Do not record a version edit for this conversion to a Table
     // since ExtractMetaData() will also generate edits.
+
+    // 立即把memtable转成level0 sst
     FileMetaData meta;
     meta.number = next_file_number_++;
     Iterator* iter = mem->NewIterator();
+    // 迭代memtable，写sst
     status = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
     delete iter;
     mem->Unref();
@@ -443,6 +449,7 @@ class Repairer {
 };
 }  // namespace
 
+// 修复leveldb元信息
 Status RepairDB(const std::string& dbname, const Options& options) {
   Repairer repairer(dbname, options);
   return repairer.Run();
