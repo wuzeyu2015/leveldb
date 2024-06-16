@@ -893,8 +893,8 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
   return versions_->LogAndApply(compact->compaction->edit(), &mutex_);  // 产生新version
 }
 
-  const uint64_t start_micros = env_->NowMicros();
 Status DBImpl::DoCompactionWork(CompactionState* compact) {
+  const uint64_t start_micros = env_->NowMicros();
   int64_t imm_micros = 0;  // Micros spent doing imm_ compactions
 
   Log(options_.info_log, "Compacting %d@%d + %d@%d files",

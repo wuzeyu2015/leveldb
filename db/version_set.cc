@@ -812,6 +812,7 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
     new_manifest_file = DescriptorFileName(dbname_, manifest_file_number_); 
     s = env_->NewWritableFile(new_manifest_file, &descriptor_file_);
     if (s.ok()) {
+      printf("DB::Open时descriptor_log_一定是nullptr，所以recovery时涉及log recovery一定会apply edit，一定会重建manifest\n");
       descriptor_log_ = new log::Writer(descriptor_file_);
       s = WriteSnapshot(descriptor_log_); 
     }
