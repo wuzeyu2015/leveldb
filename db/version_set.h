@@ -192,7 +192,7 @@ class VersionSet {
   uint64_t ManifestFileNumber() const { return manifest_file_number_; }
 
   // Allocate and return a new file number
-  uint64_t NewFileNumber() { return next_file_number_++; }
+  uint64_t NewFileNumber() { return next_file_number_++; }  // next_file_number是下一个可用的ID，所以是后++
 
   // Arrange to reuse "file_number" unless a newer file number has
   // already been allocated.
@@ -299,10 +299,10 @@ class VersionSet {
   const Options* const options_;
   TableCache* const table_cache_;
   const InternalKeyComparator icmp_;
-  uint64_t next_file_number_;
-  uint64_t manifest_file_number_;
-  uint64_t last_sequence_;
-  uint64_t log_number_;
+  uint64_t next_file_number_; // 全局的，下一个文件自增ID，重启时除了manifest可以还原这个字段，还会用log进一步更新
+  uint64_t manifest_file_number_; // DB启动后就不会变了，就是当前的manifest文件
+  uint64_t last_sequence_;  // 全局的，每次Put都更新，重启时除了manifest可以还原这个字段，还会用log进一步更新
+  uint64_t log_number_;     // 全局的，每次imm compact时会+1，表示<log_number_的log都已经没用了
   uint64_t prev_log_number_;  // 0 or backing store for memtable being compacted
 
   // Opened lazily

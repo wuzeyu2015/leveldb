@@ -779,11 +779,11 @@ void VersionSet::AppendVersion(Version* v) {
 
 // 这个只是改元信息了，之前已经把SST的IO搞完了
 Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
-  if (edit->has_log_number_) {
+  if (edit->has_log_number_) {  // memtable compact时候，edit会指定mem_的log number
     assert(edit->log_number_ >= log_number_);
     assert(edit->log_number_ < next_file_number_);
   } else {
-    edit->SetLogNumber(log_number_);
+    edit->SetLogNumber(log_number_);  // sst之间compact时候，log number不变，也就是没有log可以被忽略
   }
 
   if (!edit->has_prev_log_number_) {
@@ -847,7 +847,7 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
   // Install the new version
   if (s.ok()) {
     AppendVersion(v);
-    log_number_ = edit->log_number_;
+    log_number_ = edit->log_number_;  // 把edit的log number更新到vset中，比如时序是：sst合并（log number不变）-> imm落盘（log number更新到mem对应的log）-> sst合并（log number仍旧是mem对应的log）-> mem变imm -> imm落盘（log number更新到新mem对应的Log)
     prev_log_number_ = edit->prev_log_number_;
   } else {
     delete v;
@@ -940,6 +940,7 @@ Status VersionSet::Recover(bool* save_manifest) {
 
       if (edit.has_next_file_number_) {
         next_file = edit.next_file_number_;
+        // printf("next_file_number_=%llu\n",next_file);
         have_next_file = true;
       }
 
@@ -970,12 +971,14 @@ Status VersionSet::Recover(bool* save_manifest) {
   }
 
   if (s.ok()) {
+    // 将还原的version放入vset，是唯一的最新的version
     Version* v = new Version(this);
     builder.SaveTo(v);
     // Install recovered version
     Finalize(v);
     AppendVersion(v);
-    manifest_file_number_ = next_file;
+    manifest_file_number_ = next_file;  // 如果要重做manifest的话，给它预分配1个file number
+    printf("manifest_file_number_=%llu\n",manifest_file_number_); 
     next_file_number_ = next_file + 1;
     last_sequence_ = last_sequence;
     log_number_ = log_number;

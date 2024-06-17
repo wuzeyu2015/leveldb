@@ -321,12 +321,14 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
     }
   }
 
+  // 1, 先还原versionset
   s = versions_->Recover(save_manifest);  // 恢复manifest到verionset
   if (!s.ok()) {
     return s;
   }
   SequenceNumber max_sequence(0);
 
+  // 2，再重做log，过程中seq id, file num都会得到更新
   // Recover from all newer log files than the ones named in the
   // descriptor (new log files may have been added by the previous
   // incarnation without registering them in the descriptor).
@@ -372,7 +374,9 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
     // The previous incarnation may not have written any MANIFEST
     // records after allocating this log number.  So we manually
     // update the file number allocation counter in VersionSet.
-    versions_->MarkFileNumberUsed(logs[i]); 
+    versions_->MarkFileNumberUsed(logs[i]); // 这里用log file num更新了versionset的最新file num。
+    // 分析：【SST间merge时manifest写入的是mem_的log id+1作为next file num，之后mem_给了imm_，mem_开了新的log，这种情况manifest就不是最新file num】
+    // 重启DB后，重新生成manifest时用的file num其实会和之前mem_新开的那个log num相同，这个时序我猜是会发生的。
   }
 
   if (versions_->LastSequence() < max_sequence) {
@@ -883,7 +887,7 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
       static_cast<long long>(compact->total_bytes));
 
   // Add compaction outputs
-  compact->compaction->AddInputDeletions(compact->compaction->edit());  // version的变更1）删除2个被合并的SST
+  compact->compaction->AddInputDeletions(compact->compaction->edit());  // version的变更1）删除多个被合并的SST
   const int level = compact->compaction->level();
   for (size_t i = 0; i < compact->outputs.size(); i++) {  // version的变更2）合并出了N个SST
     const CompactionState::Output& out = compact->outputs[i];
@@ -1514,7 +1518,7 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   VersionEdit edit;
   // Recover handles create_if_missing, error_if_exists
   bool save_manifest = false;
-  Status s = impl->Recover(&edit, &save_manifest);  // 重做log，生成edit
+  Status s = impl->Recover(&edit, &save_manifest);  // 基于manifest还原versionset，然后重做log更新seq id,file num，生成edit
   if (s.ok() && impl->mem_ == nullptr) {
     // Create new log and a corresponding memtable.
     uint64_t new_log_number = impl->versions_->NewFileNumber();
@@ -1532,7 +1536,7 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   }
   if (s.ok() && save_manifest) {
     edit.SetPrevLogNumber(0);  // No older logs needed after recovery.
-    edit.SetLogNumber(impl->logfile_number_);
+    edit.SetLogNumber(impl->logfile_number_); 
     s = impl->versions_->LogAndApply(&edit, &impl->mutex_);
   }
   // recovery恢复memtable并compact sst后，再尝试做一次sst之间的compaction

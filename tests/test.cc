@@ -15,13 +15,17 @@ int main(){
     Status status=DB::Open(options,name,&db);
     cout<<status.ToString()<<endl;
 
+    // Put
+    WriteOptions woptions;
+    status=db->Put(woptions,"name","owenliang");
+
+    // SST合并
+    //db->CompactRange(nullptr, nullptr); 
+
     // if(options.comparator==BytewiseComparator()){
     //     cout<<"BytewiseComparator"<<endl;
     // }
 
-    // Put
-    WriteOptions woptions;
-    status=db->Put(woptions,"name","owenliang");
     // Get
     ReadOptions roptions;
     string value;
