@@ -73,8 +73,8 @@ class Repairer {
     Status status = FindFiles();
     if (status.ok()) {
       ConvertLogFilesToTables();  // 2,log转sst
-      ExtractMetaData();
-      status = WriteDescriptor();
+      ExtractMetaData();  // 3,扫描所有sst，得知每个sst的最小key和最大key
+      status = WriteDescriptor(); // 4,重建manifest
     }
     if (status.ok()) {
       unsigned long long bytes = 0;
@@ -261,11 +261,11 @@ class Repairer {
 
     // Extract metadata by scanning through table.
     int counter = 0;
-    Iterator* iter = NewTableIterator(t.meta);
+    Iterator* iter = NewTableIterator(t.meta);  // 打开SST文件
     bool empty = true;
     ParsedInternalKey parsed;
     t.max_sequence = 0;
-    for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+    for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {  // 迭代SST中每个ikey
       Slice key = iter->key();
       if (!ParseInternalKey(key, &parsed)) {
         Log(options_.info_log, "Table #%llu: unparsable key %s",
@@ -276,11 +276,11 @@ class Repairer {
       counter++;
       if (empty) {
         empty = false;
-        t.meta.smallest.DecodeFrom(key);
+        t.meta.smallest.DecodeFrom(key);  // SST最小key
       }
-      t.meta.largest.DecodeFrom(key);
+      t.meta.largest.DecodeFrom(key); // SST最大key
       if (parsed.sequence > t.max_sequence) {
-        t.max_sequence = parsed.sequence;
+        t.max_sequence = parsed.sequence; // SST ikey最大seq id
       }
     }
     if (!iter->status().ok()) {
@@ -366,6 +366,7 @@ class Repairer {
       }
     }
 
+    // 生成versionedit
     edit_.SetComparatorName(icmp_.user_comparator()->Name());
     edit_.SetLogNumber(0);
     edit_.SetNextFile(next_file_number_);
@@ -374,7 +375,7 @@ class Repairer {
     for (size_t i = 0; i < tables_.size(); i++) {
       // TODO(opt): separate out into multiple levels
       const TableInfo& t = tables_[i];
-      edit_.AddFile(0, t.meta.number, t.meta.file_size, t.meta.smallest,
+      edit_.AddFile(0, t.meta.number, t.meta.file_size, t.meta.smallest,  // 添加所有SST
                     t.meta.largest);
     }
 
@@ -396,12 +397,13 @@ class Repairer {
       env_->RemoveFile(tmp);
     } else {
       // Discard older manifests
+      // 归档旧的MANIFEST
       for (size_t i = 0; i < manifests_.size(); i++) {
         ArchiveFile(dbname_ + "/" + manifests_[i]);
       }
 
       // Install new manifest
-      status = env_->RenameFile(tmp, DescriptorFileName(dbname_, 1));
+      status = env_->RenameFile(tmp, DescriptorFileName(dbname_, 1)); // 临时文件rename给MANIFEST-1
       if (status.ok()) {
         status = SetCurrentFile(env_, dbname_, 1);
       } else {
