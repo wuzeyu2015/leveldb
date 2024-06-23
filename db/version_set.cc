@@ -1368,7 +1368,9 @@ FileMetaData* FindSmallestBoundaryFile(
 //
 // parameters:
 //   in     level_files:      List of files to search for boundary files.
-//   in/out compaction_files: List of files to extend by adding boundary files.
+//   in/out compaction_files: List of files to extend by adding boundary files. 
+// 什么时候会出现？当compact输出N个SST时候（因为compact输出过程中，单个SST文件大小有限制，可能会写多个SST出来）会发生，所以1个SST的右边的SST可能ukey是连续的
+// 所以当从1个SST开始发起compact时候，它右边的SST要连带进来一起compact到下一层
 void AddBoundaryInputs(const InternalKeyComparator& icmp,
                        const std::vector<FileMetaData*>& level_files,
                        std::vector<FileMetaData*>* compaction_files) {
@@ -1398,7 +1400,7 @@ void AddBoundaryInputs(const InternalKeyComparator& icmp,
 void VersionSet::SetupOtherInputs(Compaction* c) {
   const int level = c->level();
   InternalKey smallest, largest;
-
+  
   AddBoundaryInputs(icmp_, current_->files_[level], &c->inputs_[0]);  // ukey跨sst场景，扩展compact文件清单
   GetRange(c->inputs_[0], &smallest, &largest); 
 
